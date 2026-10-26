@@ -1,0 +1,30 @@
+name: Delete merged branches
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Deletes a branch once a PR from it has merged upstream and it has no commits upstream lacks.
+      - run: |
+          default=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          upstream=$(gh api "repos/$GITHUB_REPOSITORY" --jq .parent.full_name)
+          upstream_main=$(gh api "repos/$GITHUB_REPOSITORY" --jq .parent.default_branch)
+          for branch in $(gh api --paginate "repos/$GITHUB_REPOSITORY/branches" --jq '.[].name'); do
+            case "$branch" in main|"$default") continue ;; esac
+            merged=$(gh api "repos/$upstream/pulls?state=closed&head=$GITHUB_REPOSITORY_OWNER:$branch" --jq 'map(select(.merged_at)) | length')
+            [ "$merged" -gt 0 ] || { echo "Keeping $branch: no merged PR"; continue; }
+            ahead=$(gh api "repos/$upstream/compare/$upstream_main...$GITHUB_REPOSITORY_OWNER:$branch" --jq .ahead_by)
+            [ "$ahead" -eq 0 ] || { echo "Keeping $branch: $ahead commits not in $upstream_main"; continue; }
+            echo "Deleting $branch"
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
+          done
